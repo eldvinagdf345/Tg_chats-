@@ -89,3 +89,4 @@ async def _safe_disconnect(client: Client):
         await client.disconnect()
     except Exception:
         logger.exception("Failed to disconnect login client")
+
