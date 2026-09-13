@@ -6,6 +6,9 @@ class AccountStates(StatesGroup):
     waiting_api_id         = State()
     waiting_api_hash       = State()
     waiting_session_string = State()
+    waiting_phone          = State()
+    waiting_phone_code     = State()
+    waiting_2fa_password   = State()
 
 
 class AccountProfileStates(StatesGroup):
