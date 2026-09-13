@@ -13,6 +13,7 @@ from handlers_main import router as main_router
 from handlers_accounts import router as accounts_router
 from handlers_profile import router as profile_router
 from handlers_dialogue import router as dialogue_router
+from handlers_campaign import router as campaign_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -36,7 +37,7 @@ async def main():
         api_id = int(os.getenv("API_ID", "0"))
         api_hash = os.getenv("API_HASH", "").strip()
         if session_string and api_id and api_hash:
-            result = await ub.connect_account("Основной", api_id, api_hash, session_string)
+            result = await ub.connect_account("ÐÑÐ½Ð¾Ð²Ð½Ð¾Ð¹", api_id, api_hash, session_string)
             logger.info("Bootstrapped account from env vars: %s", result.get("ok", result))
 
     started = await ub.start_saved_accounts()
@@ -46,6 +47,7 @@ async def main():
     dp.include_router(accounts_router)
     dp.include_router(profile_router)
     dp.include_router(dialogue_router)
+    dp.include_router(campaign_router)
     dp.include_router(main_router)
 
     logger.info("Polling started")
