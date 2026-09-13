@@ -7,8 +7,10 @@ from database import get_accounts, get_account
 from states import AccountStates
 from keyboards import (
     main_menu_kb, accounts_list_kb, account_detail_kb, account_delete_confirm_kb, cancel_kb,
+    auth_method_kb,
 )
 import userbot as ub
+import login_flow
 from handlers_profile import start_profile_wizard
 from utils import esc
 
@@ -169,13 +171,106 @@ async def acc_got_api_hash(message: Message, state: FSMContext):
         return await message.answer("❌ Слишком короткий. Проверьте и введите снова:")
     await state.update_data(api_hash=raw)
     await message.answer(
-        "🔑 <b>Шаг 4 из 4 — Session String</b>\n\n"
-        "Введите <b>Session String</b> этого аккаунта.\n\n"
+        "🔑 <b>Шаг 4 из 4 — вход в аккаунт</b>\n\nКак подключим?",
+        parse_mode="HTML", reply_markup=auth_method_kb(),
+    )
+
+
+@router.callback_query(F.data == "auth_session_string")
+async def auth_choose_session_string(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        return await call.answer()
+    await state.set_state(AccountStates.waiting_session_string)
+    await call.message.edit_text(
+        "✍️ Введите <b>Session String</b> этого аккаунта.\n\n"
         "Как получить — запустите скрипт <code>generate_session.py</code> на своём компьютере, "
         "войдя под тем номером, который хотите подключить.",
         parse_mode="HTML", reply_markup=cancel_kb(),
     )
-    await state.set_state(AccountStates.waiting_session_string)
+
+
+@router.callback_query(F.data == "auth_phone")
+async def auth_choose_phone(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        return await call.answer()
+    await state.set_state(AccountStates.waiting_phone)
+    await call.message.edit_text(
+        "📱 Введите номер телефона в международном формате, например <code>+79991234567</code>:",
+        parse_mode="HTML", reply_markup=cancel_kb(),
+    )
+
+
+@router.message(AccountStates.waiting_phone)
+async def acc_got_phone(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    phone = message.text.strip()
+    data = await state.get_data()
+    msg = await message.answer("⏳ Отправляю код...")
+    result = await login_flow.start_login(message.from_user.id, data["api_id"], data["api_hash"], phone)
+    if result.get("error"):
+        return await msg.edit_text(
+            f"❌ {esc(result['error'])}\n\nПопробуйте ввести номер ещё раз:", parse_mode="HTML",
+        )
+    await state.update_data(phone=phone)
+    await state.set_state(AccountStates.waiting_phone_code)
+    await msg.edit_text(
+        "💬 Код отправлен в Telegram на этот номер (посмотрите сообщение от <b>Telegram</b> "
+        "в приложении — не в этом боте). Введите полученный код:",
+        parse_mode="HTML",
+    )
+
+
+@router.message(AccountStates.waiting_phone_code)
+async def acc_got_phone_code(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    code = message.text.strip().replace(" ", "")
+    msg = await message.answer("⏳ Проверяю код...")
+    result = await login_flow.submit_code(message.from_user.id, code)
+    if result.get("need_password"):
+        await state.set_state(AccountStates.waiting_2fa_password)
+        return await msg.edit_text(
+            "🔒 На аккаунте включён облачный пароль (двухфакторка). Введите пароль:",
+        )
+    if result.get("error"):
+        await state.clear()
+        return await msg.edit_text(
+            f"❌ {esc(result['error'])}", parse_mode="HTML", reply_markup=cancel_kb(),
+        )
+    await _finish_phone_login(message, state, msg, result)
+
+
+@router.message(AccountStates.waiting_2fa_password)
+async def acc_got_2fa_password(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    password = message.text.strip()
+    msg = await message.answer("⏳ Проверяю пароль...")
+    result = await login_flow.submit_password(message.from_user.id, password)
+    if result.get("error"):
+        return await msg.edit_text(f"❌ {esc(result['error'])}", parse_mode="HTML")
+    await _finish_phone_login(message, state, msg, result)
+
+
+async def _finish_phone_login(message: Message, state: FSMContext, msg: Message, login_result: dict):
+    data = await state.get_data()
+    conn = await ub.connect_account(
+        label=data["label"], api_id=data["api_id"], api_hash=data["api_hash"],
+        session_string=login_result["session_string"],
+    )
+    if not conn.get("ok"):
+        await state.clear()
+        return await msg.edit_text(
+            f"❌ Ошибка подключения:\n<code>{esc(conn['error'])}</code>",
+            parse_mode="HTML", reply_markup=cancel_kb(),
+        )
+    await msg.edit_text(
+        f"✅ <b>Аккаунт «{esc(data['label'])}» подключён!</b>\n"
+        f"👤 {esc(conn.get('name',''))} | 📱 {esc(conn.get('phone',''))}",
+        parse_mode="HTML",
+    )
+    await start_profile_wizard(message, state, conn["account_id"])
 
 
 @router.message(AccountStates.waiting_session_string)
