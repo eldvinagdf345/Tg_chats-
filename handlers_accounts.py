@@ -11,12 +11,7 @@ from keyboards import (
 )
 import userbot as ub
 import login_flow
-from handlers_profile import start_profile_wizard
 from utils import esc
-
-_TONE_LABELS = {"friendly": "дружеский", "neutral": "нейтральный", "business": "деловой"}
-_LENGTH_LABELS = {"short": "короткие", "medium": "средние", "long": "развёрнутые"}
-_EMOJI_LABELS = {"none": "не использует", "sometimes": "изредка", "often": "часто"}
 
 router = Router()
 
@@ -54,16 +49,10 @@ async def acc_view(call: CallbackQuery):
         return await call.answer("Аккаунт не найден", show_alert=True)
     status = "🟢 подключён" if acc["connected"] else "🔴 отключён"
 
-    if acc.get("profile_ready"):
-        profile_lines = (
-            f"Тон: {_TONE_LABELS.get(acc.get('tone'), '—')} | "
-            f"Сообщения: {_LENGTH_LABELS.get(acc.get('message_length'), '—')} | "
-            f"Эмодзи: {_EMOJI_LABELS.get(acc.get('emoji_usage'), '—')}\n"
-            f"Задержка ответа: {acc.get('delay_min_seconds', 20)}-{acc.get('delay_max_seconds', 90)} сек\n"
-            f"Уведомления: {acc.get('notify_chat_id') or 'в этот чат'}"
-        )
+    if acc.get("custom_instructions"):
+        profile_lines = "📝 Инструкции заданы."
     else:
-        profile_lines = "⚠️ Профиль общения ещё не настроен (используются значения по умолчанию)."
+        profile_lines = "⚠️ Инструкции ещё не заданы — «📝 Задать инструкции» ниже."
 
     await call.message.edit_text(
         f"👤 <b>{esc(acc['label'])}</b>\n📱 {esc(acc['phone'])}\nСтатус: {status}\n\n{profile_lines}",
@@ -265,12 +254,15 @@ async def _finish_phone_login(message: Message, state: FSMContext, msg: Message,
             f"❌ Ошибка подключения:\n<code>{esc(conn['error'])}</code>",
             parse_mode="HTML", reply_markup=cancel_kb(),
         )
+    await state.clear()
     await msg.edit_text(
         f"✅ <b>Аккаунт «{esc(data['label'])}» подключён!</b>\n"
-        f"👤 {esc(conn.get('name',''))} | 📱 {esc(conn.get('phone',''))}",
+        f"👤 {esc(conn.get('name',''))} | 📱 {esc(conn.get('phone',''))}\n\n"
+        f"Теперь зайдите «👤 Аккаунты → {esc(data['label'])} → 📝 Задать инструкции», чтобы "
+        f"описать, как ассистент должен общаться.",
         parse_mode="HTML",
+        reply_markup=main_menu_kb(ub.is_connected()),
     )
-    await start_profile_wizard(message, state, conn["account_id"])
 
 
 @router.message(AccountStates.waiting_session_string)
@@ -285,12 +277,15 @@ async def acc_got_session_string(message: Message, state: FSMContext):
         session_string=session_string,
     )
     if result.get("ok"):
+        await state.clear()
         await msg.edit_text(
             f"✅ <b>Аккаунт «{esc(data['label'])}» подключён!</b>\n"
-            f"👤 {esc(result.get('name',''))} | 📱 {esc(result.get('phone',''))}",
+            f"👤 {esc(result.get('name',''))} | 📱 {esc(result.get('phone',''))}\n\n"
+            f"Теперь зайдите «👤 Аккаунты → {esc(data['label'])} → 📝 Задать инструкции», чтобы "
+            f"описать, как ассистент должен общаться.",
             parse_mode="HTML",
+            reply_markup=main_menu_kb(ub.is_connected()),
         )
-        await start_profile_wizard(message, state, result["account_id"])
     else:
         await msg.edit_text(
             f"❌ Ошибка:\n<code>{result['error']}</code>",
