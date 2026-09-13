@@ -11,23 +11,17 @@ class AccountStates(StatesGroup):
     waiting_2fa_password   = State()
 
 
-class AccountProfileStates(StatesGroup):
-    """Sequential 'interview' the bot runs to build the communication
-    profile for an account — style, boundaries, notifications, timing."""
-    waiting_persona_name       = State()
-    waiting_address_form       = State()
-    waiting_tone               = State()
-    waiting_message_length     = State()
-    waiting_emoji              = State()
-    waiting_literacy           = State()
-    waiting_taboo_topics       = State()
-    waiting_fallback           = State()
-    waiting_stop_keywords      = State()
-    waiting_msg_limit_dialogue = State()
-    waiting_msg_limit_day      = State()
-    waiting_work_hours         = State()
-    waiting_notify_chat        = State()
-    waiting_delay_range        = State()
+class InstructionsChatStates(StatesGroup):
+    """Free-form chat where the account owner describes, in their own words,
+    how the assistant should behave — replaces the old fixed questionnaire."""
+    chatting = State()
+
+
+class QuickSettingStates(StatesGroup):
+    """Generic single-value editor for one hard-rule/timing setting at a
+    time (stop-words, message limits, work hours, notify chat, delays...).
+    Which setting is being edited is kept in FSM data under 'setting_key'."""
+    waiting_value = State()
 
 
 class ParserStates(StatesGroup):
@@ -49,3 +43,9 @@ class DialogueSetupStates(StatesGroup):
 
 class DraftEditStates(StatesGroup):
     waiting_new_text = State()
+
+
+class CampaignStates(StatesGroup):
+    waiting_goal   = State()
+    waiting_mode   = State()
+    confirming     = State()
