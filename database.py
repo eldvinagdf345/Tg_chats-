@@ -21,7 +21,11 @@ _ACCOUNT_PROFILE_COLUMNS = [
     ("notify_chat_id", "TEXT"),
     ("delay_min_seconds", "INTEGER DEFAULT 20"),
     ("delay_max_seconds", "INTEGER DEFAULT 90"),
+    ("extra_instructions", "TEXT"),
     ("profile_ready", "INTEGER DEFAULT 0"),
+    ("custom_instructions", "TEXT"),
+    ("campaign_interval_min_seconds", "INTEGER DEFAULT 300"),
+    ("campaign_interval_max_seconds", "INTEGER DEFAULT 900"),
 ]
 
 
@@ -82,7 +86,7 @@ async def init_db():
         await db.commit()
 
 
-# ── parsed users ──────────────────────────────────────────────────────────────
+# ââ parsed users ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 async def add_users(usernames: list) -> list:
     new_users = []
@@ -119,7 +123,7 @@ async def get_users_count() -> int:
     return row[0] if row else 0
 
 
-# ── accounts ──────────────────────────────────────────────────────────────────
+# ââ accounts ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 async def create_account(label: str, phone: str, api_id: int, api_hash: str, session_string: str) -> int:
     async with aiosqlite.connect(DB_PATH) as db:
@@ -195,7 +199,7 @@ async def count_out_messages_today_for_account(account_id: int) -> int:
     return row[0] if row else 0
 
 
-# ── contacts / dialogues ────────────────────────────────────────────────────
+# ââ contacts / dialogues ââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 async def create_contact(
     account_id: int, identifier: str, display_name: str | None = None,
