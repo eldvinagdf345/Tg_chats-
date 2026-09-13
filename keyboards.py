@@ -12,6 +12,14 @@ def main_menu_kb(has_accounts: bool) -> InlineKeyboardMarkup:
     ])
 
 
+def auth_method_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📱 Войти по номеру телефона", callback_data="auth_phone")],
+        [InlineKeyboardButton(text="✍️ У меня есть Session String", callback_data="auth_session_string")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="back_main")],
+    ])
+
+
 def channel_select_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📋 Выбрать из моих каналов", callback_data="channel_from_list")],
