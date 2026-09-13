@@ -66,15 +66,24 @@ def ai_available() -> bool:
 
 def build_system_prompt(account: dict, contact: dict) -> str:
     parts = [SYSTEM_PROMPT_BASE]
-    if account.get("persona_name"):
-        parts.append(f"Твоё имя, если спросят: {account['persona_name']}.")
-    parts.append(_ADDRESS_TEXT.get(account.get("address_form"), _ADDRESS_TEXT["ty"]))
-    parts.append(_TONE_TEXT.get(account.get("tone"), _TONE_TEXT["friendly"]))
-    parts.append(_LENGTH_TEXT.get(account.get("message_length"), _LENGTH_TEXT["short"]))
-    parts.append(_EMOJI_TEXT.get(account.get("emoji_usage"), _EMOJI_TEXT["sometimes"]))
-    parts.append(_LITERACY_TEXT.get(account.get("literacy"), _LITERACY_TEXT["casual"]))
-    if account.get("taboo_topics"):
-        parts.append(f"Никогда не поднимай и не отвечай по существу на темы: {account['taboo_topics']}.")
+    if account.get("custom_instructions"):
+        parts.append(
+            "Инструкции от хозяина аккаунта о том, как вести переписку "
+            "(стиль, приветствие, поведение в разных ситуациях):\n" + account["custom_instructions"]
+        )
+    else:
+        # Легаси-фолбэк для аккаунтов, настроенных до появления чата "Задать инструкции".
+        if account.get("persona_name"):
+            parts.append(f"Твоё имя, если спросят: {account['persona_name']}.")
+        parts.append(_ADDRESS_TEXT.get(account.get("address_form"), _ADDRESS_TEXT["ty"]))
+        parts.append(_TONE_TEXT.get(account.get("tone"), _TONE_TEXT["friendly"]))
+        parts.append(_LENGTH_TEXT.get(account.get("message_length"), _LENGTH_TEXT["short"]))
+        parts.append(_EMOJI_TEXT.get(account.get("emoji_usage"), _EMOJI_TEXT["sometimes"]))
+        parts.append(_LITERACY_TEXT.get(account.get("literacy"), _LITERACY_TEXT["casual"]))
+        if account.get("taboo_topics"):
+            parts.append(f"Никогда не поднимай и не отвечай по существу на темы: {account['taboo_topics']}.")
+    if account.get("extra_instructions"):
+        parts.append(f"Дополнительные инструкции от хозяина аккаунта: {account['extra_instructions']}")
     if contact.get("goal"):
         parts.append(f"Цель этого диалога: {contact['goal']}.")
     parts.append(
