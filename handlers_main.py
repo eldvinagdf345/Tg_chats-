@@ -14,6 +14,7 @@ from keyboards import (
     running_kb, done_kb, cancel_kb,
 )
 import userbot as ub
+import login_flow
 from parser import parse_channel, get_forum_topics
 
 router = Router()
@@ -27,6 +28,7 @@ def is_admin(uid: int) -> bool:
 async def cmd_start(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return await message.answer("⛔ Нет доступа.")
+    await login_flow.cancel_login(message.from_user.id)
     await state.clear()
     await message.answer(
         "👋 <b>Парсер Telegram</b>\n\nВыберите действие:",
@@ -39,6 +41,7 @@ async def cmd_start(message: Message, state: FSMContext):
 async def back_main(call: CallbackQuery, state: FSMContext):
     if not is_admin(call.from_user.id):
         return await call.answer()
+    await login_flow.cancel_login(call.from_user.id)
     await state.clear()
     await call.message.edit_text(
         "👋 <b>Парсер Telegram</b>\n\nВыберите действие:",
