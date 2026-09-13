@@ -4,13 +4,11 @@ from aiogram.fsm.context import FSMContext
 
 from config import ADMIN_IDS
 from database import get_account, update_account_profile
-from states import AccountProfileStates
+from states import InstructionsChatStates, QuickSettingStates
 from keyboards import (
-    main_menu_kb,
-    profile_address_kb, profile_tone_kb, profile_length_kb,
-    profile_emoji_kb, profile_literacy_kb, profile_fallback_kb,
+    account_settings_kb, instructions_chat_kb, instructions_reset_confirm_kb, setting_edit_kb,
 )
-import userbot as ub
+import instructions_chat
 from utils import esc
 
 router = Router()
@@ -20,282 +18,256 @@ def is_admin(uid: int) -> bool:
     return uid in ADMIN_IDS
 
 
-async def start_profile_wizard(message_target, state: FSMContext, account_id: int):
-    """message_target: either a Message or CallbackQuery.message to reply through."""
-    await state.update_data(profile_account_id=account_id)
-    await state.set_state(AccountProfileStates.waiting_persona_name)
-    await message_target.answer(
-        "🎭 <b>Настройка профиля общения</b>\n\n"
-        "Сейчас настроим, как этот аккаунт будет вести переписку — стиль речи, "
-        "границы и когда звать вас на помощь. Отвечайте по очереди, это займёт пару минут.\n\n"
-        "1️⃣ Как представляться, если спросят имя? (или «-», чтобы пропустить)",
-        parse_mode="HTML",
-    )
+# ═══════════════════════════════════════════════════════════════════════════════
+#  СВОБОДНЫЙ ЧАТ ИНСТРУКЦИЙ
+# ═══════════════════════════════════════════════════════════════════════════════
 
-
-@router.callback_query(F.data.startswith("acc_profile:"))
-async def acc_profile_entry(call: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data.startswith("instr_open:"))
+async def instr_open(call: CallbackQuery, state: FSMContext):
     if not is_admin(call.from_user.id):
         return await call.answer()
     account_id = int(call.data.split(":", 1)[1])
     if not await get_account(account_id):
         return await call.answer("Аккаунт не найден", show_alert=True)
-    await start_profile_wizard(call.message, state, account_id)
+    if not instructions_chat.ai_available():
+        return await call.answer("⚠️ ANTHROPIC_API_KEY не настроен на сервере.", show_alert=True)
 
-
-# ── 1. имя ───────────────────────────────────────────────────────────────────
-
-@router.message(AccountProfileStates.waiting_persona_name)
-async def prof_persona_name(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        return
-    raw = message.text.strip()
-    await state.update_data(persona_name=None if raw == "-" else raw)
-    await state.set_state(AccountProfileStates.waiting_address_form)
-    await message.answer("2️⃣ Обращение к собеседникам:", reply_markup=profile_address_kb())
-
-
-# ── 2. ты/вы ─────────────────────────────────────────────────────────────────
-
-@router.callback_query(AccountProfileStates.waiting_address_form, F.data.startswith("prof_addr:"))
-async def prof_address(call: CallbackQuery, state: FSMContext):
-    if not is_admin(call.from_user.id):
-        return await call.answer()
-    await state.update_data(address_form=call.data.split(":", 1)[1])
-    await state.set_state(AccountProfileStates.waiting_tone)
-    await call.message.edit_text("3️⃣ Тон общения:", reply_markup=profile_tone_kb())
-
-
-# ── 3. тон ───────────────────────────────────────────────────────────────────
-
-@router.callback_query(AccountProfileStates.waiting_tone, F.data.startswith("prof_tone:"))
-async def prof_tone(call: CallbackQuery, state: FSMContext):
-    if not is_admin(call.from_user.id):
-        return await call.answer()
-    await state.update_data(tone=call.data.split(":", 1)[1])
-    await state.set_state(AccountProfileStates.waiting_message_length)
-    await call.message.edit_text("4️⃣ Длина сообщений:", reply_markup=profile_length_kb())
-
-
-# ── 4. длина сообщений ───────────────────────────────────────────────────────
-
-@router.callback_query(AccountProfileStates.waiting_message_length, F.data.startswith("prof_len:"))
-async def prof_length(call: CallbackQuery, state: FSMContext):
-    if not is_admin(call.from_user.id):
-        return await call.answer()
-    await state.update_data(message_length=call.data.split(":", 1)[1])
-    await state.set_state(AccountProfileStates.waiting_emoji)
-    await call.message.edit_text("5️⃣ Эмодзи в сообщениях:", reply_markup=profile_emoji_kb())
-
-
-# ── 5. эмодзи ────────────────────────────────────────────────────────────────
-
-@router.callback_query(AccountProfileStates.waiting_emoji, F.data.startswith("prof_emoji:"))
-async def prof_emoji(call: CallbackQuery, state: FSMContext):
-    if not is_admin(call.from_user.id):
-        return await call.answer()
-    await state.update_data(emoji_usage=call.data.split(":", 1)[1])
-    await state.set_state(AccountProfileStates.waiting_literacy)
-    await call.message.edit_text("6️⃣ Стиль письма:", reply_markup=profile_literacy_kb())
-
-
-# ── 6. грамотность ───────────────────────────────────────────────────────────
-
-@router.callback_query(AccountProfileStates.waiting_literacy, F.data.startswith("prof_lit:"))
-async def prof_literacy(call: CallbackQuery, state: FSMContext):
-    if not is_admin(call.from_user.id):
-        return await call.answer()
-    await state.update_data(literacy=call.data.split(":", 1)[1])
-    await state.set_state(AccountProfileStates.waiting_taboo_topics)
+    await state.set_state(InstructionsChatStates.chatting)
+    await state.update_data(instr_account_id=account_id)
     await call.message.edit_text(
-        "7️⃣ Есть темы, которые нельзя поднимать или отвечать на них? "
-        "Опишите через запятую, или «-», чтобы пропустить:"
+        "📝 <b>Задать инструкции</b>\n\n"
+        "Опишите своими словами, как ассистент должен вести переписку: приветствие, стиль "
+        "речи, что говорить в разных ситуациях, когда останавливаться и звать вас. Можно "
+        "писать по частям в несколько сообщений — каждое дополнит общую картину, а не "
+        "перезапишет её. Пишите:",
+        parse_mode="HTML",
+        reply_markup=instructions_chat_kb(account_id),
     )
 
 
-# ── 7. табу-темы ─────────────────────────────────────────────────────────────
-
-@router.message(AccountProfileStates.waiting_taboo_topics)
-async def prof_taboo(message: Message, state: FSMContext):
+@router.message(InstructionsChatStates.chatting)
+async def instr_got_message(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
-    raw = message.text.strip()
-    await state.update_data(taboo_topics=None if raw == "-" else raw)
-    await state.set_state(AccountProfileStates.waiting_fallback)
-    await message.answer(
-        "8️⃣ Что делать, если написали что-то непонятное или неудобное:",
-        reply_markup=profile_fallback_kb(),
+    if not message.text:
+        return await message.answer("Пришлите текстовое сообщение.")
+    data = await state.get_data()
+    account_id = data["instr_account_id"]
+    msg = await message.answer("⏳ Обновляю инструкции...")
+    try:
+        result = await instructions_chat.update_instructions(account_id, message.text.strip())
+    except Exception as e:
+        return await msg.edit_text(f"❌ Ошибка ИИ:\n<code>{esc(e)}</code>", parse_mode="HTML")
+    await msg.edit_text(
+        f"{esc(result['reply'])}\n\nМожете продолжать писать, или нажмите «Готово».",
+        parse_mode="HTML",
+        reply_markup=instructions_chat_kb(account_id),
     )
 
 
-# ── 8. поведение при затруднении ─────────────────────────────────────────────
-
-@router.callback_query(AccountProfileStates.waiting_fallback, F.data.startswith("prof_fb:"))
-async def prof_fallback(call: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data.startswith("instr_show:"))
+async def instr_show(call: CallbackQuery):
     if not is_admin(call.from_user.id):
         return await call.answer()
-    await state.update_data(fallback_behavior=call.data.split(":", 1)[1])
-    await state.set_state(AccountProfileStates.waiting_stop_keywords)
+    account_id = int(call.data.split(":", 1)[1])
+    account = await get_account(account_id)
+    if not account:
+        return await call.answer("Аккаунт не найден", show_alert=True)
+    text = account.get("custom_instructions") or "Пока ничего не задано."
+    await call.message.answer(
+        f"📄 <b>Текущие инструкции:</b>\n\n{esc(text)}",
+        parse_mode="HTML", reply_markup=instructions_chat_kb(account_id),
+    )
+
+
+@router.callback_query(F.data.startswith("instr_reset:"))
+async def instr_reset(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        return await call.answer()
+    account_id = int(call.data.split(":", 1)[1])
     await call.message.edit_text(
-        "9️⃣ <b>Стоп-слова</b>\n\n"
-        "Если в сообщении собеседника встретится одно из этих слов — бот сразу "
-        "остановится и позовёт вас, не отвечая сам. Перечислите через запятую "
-        "(например: <code>встреча, оплата, карта, пароль</code>) или «-»:",
-        parse_mode="HTML",
+        "⚠️ Стереть все инструкции для этого аккаунта? Отменить будет нельзя.",
+        reply_markup=instructions_reset_confirm_kb(account_id),
     )
 
 
-# ── 9. стоп-слова ────────────────────────────────────────────────────────────
-
-@router.message(AccountProfileStates.waiting_stop_keywords)
-async def prof_stop_keywords(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        return
-    raw = message.text.strip()
-    await state.update_data(stop_keywords=None if raw == "-" else raw)
-    await state.set_state(AccountProfileStates.waiting_msg_limit_dialogue)
-    await message.answer(
-        "🔟 Максимум сообщений от бота <b>в одном диалоге</b>, после которого он "
-        "останавливается и зовёт вас? Введите число или «-» — без лимита:",
-        parse_mode="HTML",
+@router.callback_query(F.data.startswith("instr_reset_yes:"))
+async def instr_reset_yes(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        return await call.answer()
+    account_id = int(call.data.split(":", 1)[1])
+    await update_account_profile(account_id, custom_instructions=None)
+    await call.answer("Инструкции очищены")
+    await state.set_state(InstructionsChatStates.chatting)
+    await state.update_data(instr_account_id=account_id)
+    await call.message.edit_text(
+        "🗑 Инструкции очищены. Начните описывать заново:",
+        reply_markup=instructions_chat_kb(account_id),
     )
 
 
-# ── 10. лимит сообщений в диалоге ────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+#  НАСТРОЙКИ (жёсткие правила, тайминг, уведомления)
+# ═══════════════════════════════════════════════════════════════════════════════
 
-@router.message(AccountProfileStates.waiting_msg_limit_dialogue)
-async def prof_limit_dialogue(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        return
-    raw = message.text.strip()
-    value = None
-    if raw != "-":
+def _text_parser(column):
+    def parser(raw):
+        return {column: None if raw == "-" else raw}
+    return parser
+
+
+def _int_parser(column):
+    def parser(raw):
+        if raw == "-":
+            return {column: None}
         if not raw.isdigit():
-            return await message.answer("❌ Введите число или «-»:")
-        value = int(raw)
-    await state.update_data(max_messages_per_dialogue=value)
-    await state.set_state(AccountProfileStates.waiting_msg_limit_day)
-    await message.answer(
-        "1️⃣1️⃣ Максимум сообщений от бота <b>в сутки</b> по этому аккаунту (по всем диалогам)? "
-        "Число или «-» — без лимита:",
-        parse_mode="HTML",
-    )
+            return None
+        return {column: int(raw)}
+    return parser
 
 
-# ── 11. дневной лимит ────────────────────────────────────────────────────────
-
-@router.message(AccountProfileStates.waiting_msg_limit_day)
-async def prof_limit_day(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        return
-    raw = message.text.strip()
-    value = None
-    if raw != "-":
-        if not raw.isdigit():
-            return await message.answer("❌ Введите число или «-»:")
-        value = int(raw)
-    await state.update_data(max_messages_per_day=value)
-    await state.set_state(AccountProfileStates.waiting_work_hours)
-    await message.answer(
-        "1️⃣2️⃣ Часы, в которые бот может отвечать (по времени сервера), формат "
-        "<code>9-22</code>. Или «-» — без ограничений:",
-        parse_mode="HTML",
-    )
-
-
-# ── 12. рабочие часы ─────────────────────────────────────────────────────────
-
-@router.message(AccountProfileStates.waiting_work_hours)
-async def prof_work_hours(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        return
-    raw = message.text.strip()
-    start = end = None
-    if raw != "-":
+def _range_parser(col_lo, col_hi):
+    def parser(raw):
+        if raw == "-":
+            return {col_lo: None, col_hi: None}
         try:
             a, b = raw.split("-")
-            start, end = int(a), int(b)
-            assert 0 <= start <= 23 and 0 <= end <= 23
+            lo, hi = int(a.strip()), int(b.strip())
+            assert 0 <= lo <= hi
         except Exception:
-            return await message.answer("❌ Формат: <code>9-22</code> или «-»:", parse_mode="HTML")
-    await state.update_data(work_hours_start=start, work_hours_end=end)
-    await state.set_state(AccountProfileStates.waiting_notify_chat)
-    await message.answer(
-        "1️⃣3️⃣ <b>Канал уведомлений</b>\n\n"
-        "Куда слать уведомления о новых сообщениях и об остановках диалога? "
-        "Перешлите сюда любое сообщение из канала/группы, или введите его "
-        "@username / числовой ID. «-» — уведомления пойдут вам в личку с ботом:",
-        parse_mode="HTML",
+            return None
+        return {col_lo: lo, col_hi: hi}
+    return parser
+
+
+def _hours_parser(raw):
+    if raw == "-":
+        return {"work_hours_start": None, "work_hours_end": None}
+    try:
+        a, b = raw.split("-")
+        start, end = int(a.strip()), int(b.strip())
+        assert 0 <= start <= 23 and 0 <= end <= 23
+    except Exception:
+        return None
+    return {"work_hours_start": start, "work_hours_end": end}
+
+
+_SETTINGS = {
+    "stop_keywords": {
+        "title": "Стоп-слова",
+        "prompt": (
+            "Перечислите через запятую слова/темы, при которых бот сразу останавливается "
+            "и зовёт вас, например: <code>встреча, оплата, карта, пароль</code>. Или «-», "
+            "чтобы убрать:"
+        ),
+        "parser": _text_parser("stop_keywords"),
+    },
+    "max_messages_per_dialogue": {
+        "title": "Лимит сообщений за диалог",
+        "prompt": "Максимум ответов бота в одном диалоге, после которого он останавливается. Число, или «-» — без лимита:",
+        "parser": _int_parser("max_messages_per_dialogue"),
+    },
+    "max_messages_per_day": {
+        "title": "Лимит сообщений за сутки",
+        "prompt": "Максимум ответов бота в сутки по этому аккаунту (по всем диалогам). Число, или «-» — без лимита:",
+        "parser": _int_parser("max_messages_per_day"),
+    },
+    "work_hours": {
+        "title": "Рабочие часы",
+        "prompt": "Часы, когда бот может отвечать (по времени сервера), формат <code>9-22</code>. Или «-» — без ограничений:",
+        "parser": _hours_parser,
+    },
+    "notify_chat_id": {
+        "title": "Канал уведомлений",
+        "prompt": (
+            "Перешлите сюда любое сообщение из канала/группы, или введите его @username / "
+            "числовой ID. «-» — уведомления будут приходить в этот чат:"
+        ),
+        "parser": None,  # обрабатывается отдельно — нужен доступ к forward_from_chat
+    },
+    "delay_range": {
+        "title": "Задержка ответа",
+        "prompt": (
+            "Диапазон в секундах, например <code>30-180</code> — случайная задержка перед "
+            "автоответом плюс «печатает…». «-» — по умолчанию (20-90):"
+        ),
+        "parser": _range_parser("delay_min_seconds", "delay_max_seconds"),
+    },
+    "campaign_interval": {
+        "title": "Интервал рассылки",
+        "prompt": (
+            "Диапазон в секундах между стартом диалогов с новыми людьми при рассылке, "
+            "например <code>300-900</code> (5-15 минут). «-» — по умолчанию:"
+        ),
+        "parser": _range_parser("campaign_interval_min_seconds", "campaign_interval_max_seconds"),
+    },
+}
+
+
+async def _render_settings(account_id: int) -> tuple[str, dict]:
+    account = await get_account(account_id)
+    text = f"⚙️ <b>Настройки — {esc(account['label'])}</b>\n\nНажмите на пункт, чтобы изменить:"
+    return text, account
+
+
+@router.callback_query(F.data.startswith("acc_settings:"))
+async def acc_settings_menu(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        return await call.answer()
+    account_id = int(call.data.split(":", 1)[1])
+    account = await get_account(account_id)
+    if not account:
+        return await call.answer("Аккаунт не найден", show_alert=True)
+    await state.clear()
+    text, account = await _render_settings(account_id)
+    await call.message.edit_text(text, parse_mode="HTML", reply_markup=account_settings_kb(account_id, account))
+
+
+@router.callback_query(F.data.startswith("set_open:"))
+async def set_open(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        return await call.answer()
+    _, key, account_id = call.data.split(":", 2)
+    account_id = int(account_id)
+    setting = _SETTINGS.get(key)
+    if not setting:
+        return await call.answer()
+    await state.set_state(QuickSettingStates.waiting_value)
+    await state.update_data(setting_key=key, setting_account_id=account_id)
+    await call.message.edit_text(
+        f"✏️ <b>{setting['title']}</b>\n\n{setting['prompt']}",
+        parse_mode="HTML", reply_markup=setting_edit_kb(account_id),
     )
 
 
-# ── 13. канал уведомлений ────────────────────────────────────────────────────
-
-@router.message(AccountProfileStates.waiting_notify_chat)
-async def prof_notify_chat(message: Message, state: FSMContext):
+@router.message(QuickSettingStates.waiting_value)
+async def set_got_value(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
-    forwarded_chat = getattr(message, "forward_from_chat", None)
-    chat_id = None
-    if forwarded_chat:
-        chat_id = str(forwarded_chat.id)
+    data = await state.get_data()
+    key = data["setting_key"]
+    account_id = data["setting_account_id"]
+    setting = _SETTINGS[key]
+
+    if key == "notify_chat_id":
+        forwarded_chat = getattr(message, "forward_from_chat", None)
+        if forwarded_chat:
+            fields = {"notify_chat_id": str(forwarded_chat.id)}
+        else:
+            raw = (message.text or "").strip()
+            fields = {"notify_chat_id": None if (not raw or raw == "-") else raw}
     else:
         raw = (message.text or "").strip()
-        if raw and raw != "-":
-            chat_id = raw
-    await state.update_data(notify_chat_id=chat_id)
-    await state.set_state(AccountProfileStates.waiting_delay_range)
-    await message.answer(
-        "1️⃣4️⃣ <b>Задержка перед ответом</b>\n\n"
-        "Диапазон в секундах, например <code>30-180</code> — бот будет ждать "
-        "случайное время из этого диапазона и показывать «печатает…» перед отправкой. "
-        "«-» — использовать значение по умолчанию (20-90 сек):",
-        parse_mode="HTML",
-    )
+        fields = setting["parser"](raw)
+        if fields is None:
+            return await message.answer(
+                f"❌ Не понял формат.\n\n{setting['prompt']}", parse_mode="HTML",
+            )
 
-
-# ── 14. задержка ─────────────────────────────────────────────────────────────
-
-@router.message(AccountProfileStates.waiting_delay_range)
-async def prof_delay_range(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        return
-    raw = message.text.strip()
-    delay_min = delay_max = None
-    if raw != "-":
-        try:
-            a, b = raw.split("-")
-            delay_min, delay_max = int(a), int(b)
-            assert 0 <= delay_min <= delay_max
-        except Exception:
-            return await message.answer("❌ Формат: <code>30-180</code> или «-»:", parse_mode="HTML")
-    await state.update_data(delay_min_seconds=delay_min, delay_max_seconds=delay_max)
-    await _finish_wizard(message, state)
-
-
-_PROFILE_FIELDS = [
-    "persona_name", "address_form", "tone", "message_length", "emoji_usage", "literacy",
-    "taboo_topics", "fallback_behavior", "stop_keywords",
-    "max_messages_per_dialogue", "max_messages_per_day",
-    "work_hours_start", "work_hours_end", "notify_chat_id",
-    "delay_min_seconds", "delay_max_seconds",
-]
-
-
-async def _finish_wizard(message: Message, state: FSMContext):
-    data = await state.get_data()
-    account_id = data["profile_account_id"]
-
-    update_fields = {k: data[k] for k in _PROFILE_FIELDS if k in data}
-    update_fields["profile_ready"] = 1
-    await update_account_profile(account_id, **update_fields)
+    await update_account_profile(account_id, **fields)
     await state.clear()
-
-    account = await get_account(account_id)
-    label = esc(account["label"])
+    text, account = await _render_settings(account_id)
     await message.answer(
-        f"✅ <b>Профиль для «{label}» настроен!</b>\n\n"
-        f"Можно менять его в любой момент через «👤 Аккаунты → {label} → 🎭 Профиль общения».",
-        parse_mode="HTML",
-        reply_markup=main_menu_kb(ub.is_connected()),
+        f"✅ Сохранено.\n\n{text}", parse_mode="HTML",
+        reply_markup=account_settings_kb(account_id, account),
     )
