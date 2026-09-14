@@ -3,12 +3,13 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 
 from config import ADMIN_IDS
-from database import get_account, update_account_profile
+from database import get_account, get_contact, update_account_profile
 from states import InstructionsChatStates, QuickSettingStates
 from keyboards import (
     account_settings_kb, instructions_chat_kb, instructions_reset_confirm_kb, setting_edit_kb,
 )
 import instructions_chat
+import dialogue as dlg
 from utils import esc
 
 router = Router()
@@ -45,6 +46,25 @@ async def instr_open(call: CallbackQuery, state: FSMContext):
     )
 
 
+@router.callback_query(F.data.startswith("fix_pattern:"))
+async def fix_pattern_open(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        return await call.answer()
+    contact_id = int(call.data.split(":", 1)[1])
+    contact = await get_contact(contact_id)
+    if not contact:
+        return await call.answer("Диалог не найден", show_alert=True)
+    if not instructions_chat.ai_available():
+        return await call.answer("⚠️ ANTHROPIC_API_KEY не настроен на сервере.", show_alert=True)
+
+    await state.set_state(InstructionsChatStates.chatting)
+    await state.update_data(instr_account_id=contact["account_id"], retry_contact_id=contact_id)
+    await call.message.reply(
+        "📝 Опишите, как нужно было ответить на это сообщение. Это дополнит общие инструкции "
+        "аккаунта, после чего диалог возобновится и бот попробует ответить снова:",
+    )
+
+
 @router.message(InstructionsChatStates.chatting)
 async def instr_got_message(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
@@ -53,11 +73,20 @@ async def instr_got_message(message: Message, state: FSMContext):
         return await message.answer("Пришлите текстовое сообщение.")
     data = await state.get_data()
     account_id = data["instr_account_id"]
+    retry_contact_id = data.get("retry_contact_id")
     msg = await message.answer("⏳ Обновляю инструкции...")
     try:
         result = await instructions_chat.update_instructions(account_id, message.text.strip())
     except Exception as e:
         return await msg.edit_text(f"❌ Ошибка ИИ:\n<code>{esc(e)}</code>", parse_mode="HTML")
+
+    if retry_contact_id:
+        await state.clear()
+        outcome = await dlg.retry_after_instruction(retry_contact_id)
+        return await msg.edit_text(
+            f"{esc(result['reply'])}\n\n{outcome}", parse_mode="HTML",
+        )
+
     await msg.edit_text(
         f"{esc(result['reply'])}\n\nМожете продолжать писать, или нажмите «Готово».",
         parse_mode="HTML",
@@ -169,105 +198,3 @@ _SETTINGS = {
     },
     "max_messages_per_day": {
         "title": "Лимит сообщений за сутки",
-        "prompt": "Максимум ответов бота в сутки по этому аккаунту (по всем диалогам). Число, или «-» — без лимита:",
-        "parser": _int_parser("max_messages_per_day"),
-    },
-    "work_hours": {
-        "title": "Рабочие часы",
-        "prompt": "Часы, когда бот может отвечать (по времени сервера), формат <code>9-22</code>. Или «-» — без ограничений:",
-        "parser": _hours_parser,
-    },
-    "notify_chat_id": {
-        "title": "Канал уведомлений",
-        "prompt": (
-            "Перешлите сюда любое сообщение из канала/группы, или введите его @username / "
-            "числовой ID. «-» — уведомления будут приходить в этот чат:"
-        ),
-        "parser": None,  # обрабатывается отдельно — нужен доступ к forward_from_chat
-    },
-    "delay_range": {
-        "title": "Задержка ответа",
-        "prompt": (
-            "Диапазон в секундах, например <code>30-180</code> — случайная задержка перед "
-            "автоответом плюс «печатает…». «-» — по умолчанию (20-90):"
-        ),
-        "parser": _range_parser("delay_min_seconds", "delay_max_seconds"),
-    },
-    "campaign_interval": {
-        "title": "Интервал рассылки",
-        "prompt": (
-            "Диапазон в секундах между стартом диалогов с новыми людьми при рассылке, "
-            "например <code>300-900</code> (5-15 минут). «-» — по умолчанию:"
-        ),
-        "parser": _range_parser("campaign_interval_min_seconds", "campaign_interval_max_seconds"),
-    },
-}
-
-
-async def _render_settings(account_id: int) -> tuple[str, dict]:
-    account = await get_account(account_id)
-    text = f"⚙️ <b>Настройки — {esc(account['label'])}</b>\n\nНажмите на пункт, чтобы изменить:"
-    return text, account
-
-
-@router.callback_query(F.data.startswith("acc_settings:"))
-async def acc_settings_menu(call: CallbackQuery, state: FSMContext):
-    if not is_admin(call.from_user.id):
-        return await call.answer()
-    account_id = int(call.data.split(":", 1)[1])
-    account = await get_account(account_id)
-    if not account:
-        return await call.answer("Аккаунт не найден", show_alert=True)
-    await state.clear()
-    text, account = await _render_settings(account_id)
-    await call.message.edit_text(text, parse_mode="HTML", reply_markup=account_settings_kb(account_id, account))
-
-
-@router.callback_query(F.data.startswith("set_open:"))
-async def set_open(call: CallbackQuery, state: FSMContext):
-    if not is_admin(call.from_user.id):
-        return await call.answer()
-    _, key, account_id = call.data.split(":", 2)
-    account_id = int(account_id)
-    setting = _SETTINGS.get(key)
-    if not setting:
-        return await call.answer()
-    await state.set_state(QuickSettingStates.waiting_value)
-    await state.update_data(setting_key=key, setting_account_id=account_id)
-    await call.message.edit_text(
-        f"✏️ <b>{setting['title']}</b>\n\n{setting['prompt']}",
-        parse_mode="HTML", reply_markup=setting_edit_kb(account_id),
-    )
-
-
-@router.message(QuickSettingStates.waiting_value)
-async def set_got_value(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        return
-    data = await state.get_data()
-    key = data["setting_key"]
-    account_id = data["setting_account_id"]
-    setting = _SETTINGS[key]
-
-    if key == "notify_chat_id":
-        forwarded_chat = getattr(message, "forward_from_chat", None)
-        if forwarded_chat:
-            fields = {"notify_chat_id": str(forwarded_chat.id)}
-        else:
-            raw = (message.text or "").strip()
-            fields = {"notify_chat_id": None if (not raw or raw == "-") else raw}
-    else:
-        raw = (message.text or "").strip()
-        fields = setting["parser"](raw)
-        if fields is None:
-            return await message.answer(
-                f"❌ Не понял формат.\n\n{setting['prompt']}", parse_mode="HTML",
-            )
-
-    await update_account_profile(account_id, **fields)
-    await state.clear()
-    text, account = await _render_settings(account_id)
-    await message.answer(
-        f"✅ Сохранено.\n\n{text}", parse_mode="HTML",
-        reply_markup=account_settings_kb(account_id, account),
-    )
