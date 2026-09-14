@@ -23,10 +23,14 @@ def get_progress(account_id: int) -> dict | None:
     return _progress.get(account_id)
 
 
-def start_campaign(account_id: int, usernames: list[str], goal: str | None, auto_send: bool) -> bool:
+def start_campaign(account_id: int, usernames: list[str]) -> bool:
+    """Starts dialogues with everyone in `usernames`, relying entirely on the
+    account's own instructions/persona — no per-campaign goal or send-mode,
+    those are already configured on the account. New contacts always start
+    in draft-review mode (safe default)."""
     if account_id in _running:
         return False
-    task = asyncio.create_task(_run(account_id, usernames, goal, auto_send))
+    task = asyncio.create_task(_run(account_id, usernames))
     _running[account_id] = task
     return True
 
@@ -40,7 +44,7 @@ def stop_campaign(account_id: int) -> bool:
     return False
 
 
-async def _run(account_id: int, usernames: list[str], goal: str | None, auto_send: bool):
+async def _run(account_id: int, usernames: list[str]):
     _progress[account_id] = {"sent": 0, "skipped": 0, "total": len(usernames)}
     try:
         for raw in usernames:
@@ -62,9 +66,9 @@ async def _run(account_id: int, usernames: list[str], goal: str | None, auto_sen
 
             try:
                 if dlg.ai_available():
-                    opening = await dlg.generate_opening_message({"goal": goal}, account)
+                    opening = await dlg.generate_opening_message({}, account)
                 else:
-                    opening = goal or "Привет!"
+                    opening = "Привет!"
             except Exception:
                 logger.exception("Campaign: failed to generate opening for %s", identifier)
                 continue
@@ -76,7 +80,7 @@ async def _run(account_id: int, usernames: list[str], goal: str | None, auto_sen
                 continue
 
             contact_id = await create_contact(
-                account_id=account_id, identifier=identifier, goal=goal, auto_send=auto_send,
+                account_id=account_id, identifier=identifier, auto_send=False,
             )
             await add_dialogue_message(contact_id, "out", opening, status="sent")
             _progress[account_id]["sent"] += 1
