@@ -1,162 +1,3 @@
-import asyncio
-from datetime import datetime
-from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, BufferedInputFile
-from aiogram.fsm.context import FSMContext
-from aiogram.filters import CommandStart
-
-from config import ADMIN_IDS
-from database import get_all_users, get_users_count, add_users
-from states import ParserStates
-from keyboards import (
-    main_menu_kb, channel_select_kb, channels_list_kb, topics_list_kb,
-    parse_mode_kb, confirm_parse_kb,
-    running_kb, done_kb, cancel_kb,
-)
-import userbot as ub
-import login_flow
-from parser import parse_channel, get_forum_topics
-
-router = Router()
-
-
-def is_admin(uid: int) -> bool:
-    return uid in ADMIN_IDS
-
-
-@router.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        return await message.answer("⛔ Нет доступа.")
-    await login_flow.cancel_login(message.from_user.id)
-    await state.clear()
-    await message.answer(
-        "👋 <b>Парсер Telegram</b>\n\nВыберите действие:",
-        parse_mode="HTML",
-        reply_markup=main_menu_kb(ub.is_connected()),
-    )
-
-
-@router.callback_query(F.data == "back_main")
-async def back_main(call: CallbackQuery, state: FSMContext):
-    if not is_admin(call.from_user.id):
-        return await call.answer()
-    await login_flow.cancel_login(call.from_user.id)
-    await state.clear()
-    await call.message.edit_text(
-        "👋 <b>Парсер Telegram</b>\n\nВыберите действие:",
-        parse_mode="HTML",
-        reply_markup=main_menu_kb(ub.is_connected()),
-    )
-
-
-@router.callback_query(F.data == "noop")
-async def noop(call: CallbackQuery):
-    await call.answer()
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-#  РЕЗУЛЬТАТЫ
-# ═══════════════════════════════════════════════════════════════════════════════
-
-@router.callback_query(F.data == "show_results")
-async def show_results(call: CallbackQuery):
-    if not is_admin(call.from_user.id):
-        return await call.answer()
-    count = await get_users_count()
-    if count == 0:
-        return await call.message.edit_text(
-            "📭 База пуста. Запустите парсинг.",
-            reply_markup=main_menu_kb(ub.is_connected()),
-        )
-    users = await get_all_users()
-    if count <= 100:
-        await call.message.edit_text(
-            f"📋 <b>Спаршено: {count}</b>\n\n" + "\n".join(users),
-            parse_mode="HTML",
-            reply_markup=main_menu_kb(ub.is_connected()),
-        )
-    else:
-        doc = BufferedInputFile("\n".join(users).encode(), filename=f"parsed_{count}.txt")
-        await call.message.answer_document(doc,
-            caption=f"📋 Всего: <b>{count}</b> пользователей", parse_mode="HTML")
-        await call.message.edit_reply_markup(reply_markup=main_menu_kb(ub.is_connected()))
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-#  ПАРСИНГ — выбор канала
-# ═══════════════════════════════════════════════════════════════════════════════
-
-@router.callback_query(F.data == "start_parsing")
-async def start_parsing(call: CallbackQuery, state: FSMContext):
-    if not is_admin(call.from_user.id):
-        return await call.answer()
-    if not ub.is_connected():
-        return await call.answer("⚠️ Сначала подключите аккаунт!", show_alert=True)
-    await state.set_state(ParserStates.waiting_channel_choice)
-    await call.message.edit_text(
-        "📡 <b>Выбор канала для парсинга</b>\n\nКак хотите указать канал?",
-        parse_mode="HTML",
-        reply_markup=channel_select_kb(),
-    )
-
-
-@router.callback_query(F.data == "channel_from_list")
-async def channel_from_list(call: CallbackQuery, state: FSMContext):
-    if not is_admin(call.from_user.id):
-        return await call.answer()
-    msg = await call.message.edit_text("⏳ Загружаю список каналов...")
-    try:
-        client = ub.get_userbot()
-        channels = []
-        async for dialog in client.get_dialogs():
-            chat = dialog.chat
-            if chat.type.value in ("channel", "supergroup"):
-                username = f"@{chat.username}" if chat.username else str(chat.id)
-                channels.append((chat.title, username))
-            if len(channels) >= 50:
-                break
-        if not channels:
-            await msg.edit_text("😕 Каналы не найдены.", reply_markup=channel_select_kb())
-            return
-        await msg.edit_text(
-            f"📋 <b>Ваши каналы ({len(channels)} шт.)</b>\n\nВыберите канал:",
-            parse_mode="HTML",
-            reply_markup=channels_list_kb(channels),
-        )
-    except Exception as e:
-        await msg.edit_text(f"❌ Ошибка: {e}", reply_markup=channel_select_kb())
-
-
-async def _after_channel_selected(call: CallbackQuery, state: FSMContext, channel: str):
-    """Called after channel is picked — check for forum topics."""
-    await state.update_data(channel=channel, topic_id=None)
-    msg = await call.message.edit_text("⏳ Проверяю канал...")
-
-    topics = await get_forum_topics(channel)
-    if topics:
-        await state.update_data(topics=[(tid, title) for tid, title in topics])
-        await state.set_state(ParserStates.waiting_topic_choice)
-        await msg.edit_text(
-            f"💬 <b>Группа с темами</b>\n\nВыберите тему для парсинга:",
-            parse_mode="HTML",
-            reply_markup=topics_list_kb(topics, channel),
-        )
-    else:
-        await state.set_state(ParserStates.waiting_mode_choice)
-        await msg.edit_text(
-            f"📡 Канал: <code>{channel}</code>\n\nВыберите режим парсинга:",
-            parse_mode="HTML",
-            reply_markup=parse_mode_kb(),
-        )
-
-
-@router.callback_query(F.data.startswith("pick_channel:"))
-async def pick_channel(call: CallbackQuery, state: FSMContext):
-    if not is_admin(call.from_user.id):
-        return await call.answer()
-    channel = call.data.split(":", 1)[1]
-    await _after_channel_selected(call, state, channel)
 
 
 @router.callback_query(F.data == "channel_by_link")
@@ -386,32 +227,15 @@ from aiogram.fsm.state import State, StatesGroup as SG
 class UploadStates(SG):
     waiting_file = State()
 
-
-@router.callback_query(F.data == "upload_base")
-async def upload_base(call: CallbackQuery, state: FSMContext):
-    if not is_admin(call.from_user.id):
-        return await call.answer()
     await state.set_state(UploadStates.waiting_file)
     await call.message.edit_text(
         "📥 <b>Загрузка базы</b>\n\n"
         "Отправьте <b>txt файл</b> с никнеймами — по одному на строку.\n\n"
+        "Отправьте <b>txt файл</b> с никнеймами — по одному на строку. Эта база "
+        "используется как список контактов для рассылки.\n\n"
         "Формат:\n"
         "<code>@username1\n@username2\nusername3</code>\n\n"
         "<i>@ в начале необязателен — бот добавит сам.</i>",
-        parse_mode="HTML",
-        reply_markup=cancel_kb(),
-    )
-
-
-@router.message(UploadStates.waiting_file, F.document)
-async def got_base_file(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        return
-
-    doc = message.document
-    if not doc.file_name.endswith(".txt"):
-        return await message.answer("❌ Нужен файл формата <b>.txt</b>", parse_mode="HTML")
-
     msg = await message.answer("⏳ Читаю файл...")
 
     try:
@@ -424,14 +248,6 @@ async def got_base_file(message: Message, state: FSMContext):
         lines = content.splitlines()
         usernames = []
         for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            if not line.startswith("@"):
-                line = "@" + line
-            usernames.append(line.lower())
-
-        if not usernames:
             await msg.edit_text("❌ Файл пуст или не содержит никнеймов.")
             return
 
@@ -440,28 +256,3 @@ async def got_base_file(message: Message, state: FSMContext):
         new_users = await add_users(usernames)
         total = await get_users_count()
 
-        await state.clear()
-        await msg.edit_text(
-            f"✅ <b>База загружена</b>\n\n"
-            f"В файле: {len(usernames)}\n"
-            f"Новых добавлено: <b>{len(new_users)}</b>\n"
-            f"Уже были в базе: {len(usernames) - len(new_users)}\n"
-            f"Всего в базе: {total}",
-            parse_mode="HTML",
-            reply_markup=main_menu_kb(ub.is_connected()),
-        )
-
-    except Exception as e:
-        await msg.edit_text(
-            f"❌ Ошибка при чтении файла:\n<code>{e}</code>",
-            parse_mode="HTML",
-            reply_markup=cancel_kb(),
-        )
-
-
-@router.message(UploadStates.waiting_file)
-async def upload_wrong_type(message: Message):
-    await message.answer(
-        "❌ Нужен именно <b>txt файл</b>. Отправьте файл, а не текст.",
-        parse_mode="HTML",
-    )
