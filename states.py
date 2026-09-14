@@ -1,6 +1,21 @@
 from aiogram.fsm.state import State, StatesGroup
 
 
+class AuthStates(StatesGroup):
+    waiting_api_id   = State()
+    waiting_api_hash = State()
+    waiting_code     = State()   # session string
+
+
+class ParserStates(StatesGroup):
+    waiting_channel_choice = State()
+    waiting_channel_link   = State()
+    waiting_topic_choice   = State()  # выбор темы форума
+    waiting_mode_choice    = State()
+    waiting_count          = State()
+    waiting_date_from      = State()
+    waiting_date_to        = State()
+    confirming             = State()
 class AccountStates(StatesGroup):
     waiting_label          = State()
     waiting_api_id         = State()
@@ -24,17 +39,6 @@ class QuickSettingStates(StatesGroup):
     waiting_value = State()
 
 
-class ParserStates(StatesGroup):
-    waiting_channel_choice = State()
-    waiting_channel_link   = State()
-    waiting_topic_choice   = State()  # выбор темы форума
-    waiting_mode_choice    = State()
-    waiting_count          = State()
-    waiting_date_from      = State()
-    waiting_date_to        = State()
-    confirming             = State()
-
-
 class DialogueSetupStates(StatesGroup):
     waiting_contact         = State()
     waiting_goal            = State()
@@ -43,9 +47,3 @@ class DialogueSetupStates(StatesGroup):
 
 class DraftEditStates(StatesGroup):
     waiting_new_text = State()
-
-
-class CampaignStates(StatesGroup):
-    waiting_goal   = State()
-    waiting_mode   = State()
-    confirming     = State()
