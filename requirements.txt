@@ -1,0 +1,9 @@
+aiogram==3.13.0
+pyrogram==2.0.106
+TgCrypto==1.2.5
+aiosqlite==0.20.0
+python-dotenv==1.0.1
+anthropic==0.40.0
+fastapi==0.115.0
+uvicorn==0.32.0
+websockets==13.1

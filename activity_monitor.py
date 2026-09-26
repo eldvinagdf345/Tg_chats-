@@ -1,7 +1,8 @@
 import asyncio
 import logging
 
-from database import get_stale_active_contacts, set_contacts_bucket
+from database import get_stale_active_contacts, set_contacts_bucket, get_account
+import events
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,17 @@ async def run():
             if stale:
                 await set_contacts_bucket([c["id"] for c in stale], "trash")
                 logger.info("Moved %d inactive contact(s) to Корзина", len(stale))
+                accounts_cache = {}
+                for c in stale:
+                    if c["account_id"] not in accounts_cache:
+                        accounts_cache[c["account_id"]] = await get_account(c["account_id"])
+                    acc = accounts_cache[c["account_id"]]
+                    events.emit(
+                        "system",
+                        account=acc.get("label") if acc else None,
+                        contact=c.get("display_name") or c["identifier"],
+                        text="перемещён в «Корзину» — нет ответа дольше тайм-аута",
+                    )
         except Exception:
             logger.exception("Activity monitor sweep failed")
         await asyncio.sleep(CHECK_INTERVAL_SECONDS)
